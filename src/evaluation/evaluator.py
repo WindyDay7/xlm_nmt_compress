@@ -487,6 +487,11 @@ class EncDecEvaluator(Evaluator):
                 max_len = int(1.5 * len1.max().item() + 10)
                 if params.beam_size == 1:
                     generated, lengths = decoder.generate(enc1, len1, lang2_id, max_len=max_len)
+                    # generated 是 最长长度 * Batch_size
+                    # lengths 是这个batch_size 句子中最长长度
+                    # print("generation's size: ", generated.size(), "\nand generation is:", generated)
+                    # print("lengths of output is:", lengths)
+
                 else:
                     generated, lengths = decoder.generate_beam(
                         enc1, len1, lang2_id, beam_size=params.beam_size,
@@ -532,8 +537,10 @@ class LSTM_Evaluator(Evaluator):
         super().__init__(trainer, data, params)
         self.encoder = trainer.encoder
         self.decoder = trainer.decoder
+        self.data = data
+        self.params = params
 
-    def evaluate_mt(self, scores, data_set, lang1, lang2, eval_bleu):
+    def evaluate_lstm_mt(self, scores, data_set, lang1, lang2, eval_bleu):
         """
         Evaluate perplexity and next word prediction accuracy.
         """
@@ -544,8 +551,6 @@ class LSTM_Evaluator(Evaluator):
 
         self.encoder.eval()
         self.decoder.eval()
-        encoder = self.encoder.module if params.multi_gpu else self.encoder
-        decoder = self.decoder.module if params.multi_gpu else self.decoder
 
         params = params
         lang1_id = params.lang2id[lang1]
@@ -569,54 +574,54 @@ class LSTM_Evaluator(Evaluator):
 
             # generate batch
             (x1, len1), (x2, len2) = batch
-            langs1 = x1.clone().fill_(lang1_id)
-            langs2 = x2.clone().fill_(lang2_id)
+            x1, len1, x2, len2 = to_cuda(x1, len1, x2, len2)
+            Batch_size = x1.size(1)
+            input_length = x1.size(0)
+            target_length = x2.size(0)
+            encoder_hidden = self.encoder.initHidden(Batch_size)
+            encoder_outputs = torch.zeros(params.tokens_per_batch, Batch_size, 1024).cuda()
+            loss = 0
+            
+            for ei in range(input_length):
+                encoder_output, encoder_hidden = self.encoder(x1[ei], encoder_hidden, Batch_size)
+                encoder_outputs[ei] = encoder_output[0, 0]
 
-            # target words to predict
-            alen = torch.arange(len2.max(), dtype=torch.long, device=len2.device)
-            pred_mask = alen[:, None] < len2[None] - 1  # do not predict anything given the last target word
-            y = x2[1:].masked_select(pred_mask[:-1])
-            assert len(y) == (len2 - 1).sum().item()
+            decoder_input = torch.tensor([[0]]).cuda()
+            decoder_hidden = self.decoder.initHidden(Batch_size)
 
-            # cuda
-            x1, len1, langs1, x2, len2, langs2, y = to_cuda(x1, len1, langs1, x2, len2, langs2, y)
+            decoder_outputs = torch.ones(params.tokens_per_batch, Batch_size, params.n_words).cuda()
+            use_teacher_forcing = True if random.random() < 0.5 else False
 
-            # encode source sentence
-            enc1 = encoder('fwd', x=x1, lengths=len1, langs=langs1, causal=False)
-            enc1 = enc1.transpose(0, 1)
-            enc1 = enc1.half() if params.fp16 else enc1
+            if use_teacher_forcing:
+                # Teacher forcing: Feed the target as the next input
+                for di in range(target_length):
+                    decoder_output, decoder_hidden, decoder_attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs, Batch_size)
+                    loss += criterion(decoder_output, x2[di])
+                    decoder_input = x2[di]  # Teacher forcing
+                    decoder_outputs[di] = decoder_output
 
-            # decode target sentence
-            dec2 = decoder('fwd', x=x2, lengths=len2, langs=langs2, causal=True, src_enc=enc1, src_len=len1)
+            else:
+                # Without teacher forcing: use its own predictions as the next input
+                for di in range(target_length):
+                    decoder_output, decoder_hidden, decoder_attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs, Batch_size)
+                    topv, topi = decoder_output.topk(1)
+                    decoder_input = topi.squeeze().detach()  # detach from history as input
+                    
+                    loss += criterion(decoder_output, x2[di])
+                    if decoder_input[0].item() == 1:
+                        break
+                    decoder_outputs[di] = decoder_output
 
-            # loss
-            word_scores, loss = decoder('predict', tensor=dec2, pred_mask=pred_mask, y=y, get_scores=True)
+            decoder_outputs = decoder_outputs.argmax(-1)
 
-            # update stats
-            n_words += y.size(0)
-            xe_loss += loss.item() * len(y)
-            n_valid += (word_scores.max(1)[1] == y).sum().item()
-            if eval_memory:
-                for k, v in self.memory_list:
-                    all_mem_att[k].append((v.last_indices, v.last_scores))
-
+            
             # generate translation - translate / convert to text
             if eval_bleu:
-                max_len = int(1.5 * len1.max().item() + 10)
-                if params.beam_size == 1:
-                    generated, lengths = decoder.generate(enc1, len1, lang2_id, max_len=max_len)
-                else:
-                    generated, lengths = decoder.generate_beam(
-                        enc1, len1, lang2_id, beam_size=params.beam_size,
-                        length_penalty=params.length_penalty,
-                        early_stopping=params.early_stopping,
-                        max_len=max_len
-                    )
-                hypothesis.extend(convert_to_text(generated, lengths, self.dico, params))
+                hypothesis.extend(convert_to_text(decoder_outputs, len2, self.dico, params))
 
         # compute perplexity and prediction accuracy
-        scores['%s_%s-%s_mt_ppl' % (data_set, lang1, lang2)] = np.exp(xe_loss / n_words)
-        scores['%s_%s-%s_mt_acc' % (data_set, lang1, lang2)] = 100. * n_valid / n_words
+        # scores['%s_%s-%s_mt_ppl' % (data_set, lang1, lang2)] = np.exp(xe_loss / n_words)
+        # scores['%s_%s-%s_mt_acc' % (data_set, lang1, lang2)] = 100. * n_valid / n_words
 
         # compute memory usage
         if eval_memory:
@@ -641,10 +646,13 @@ class LSTM_Evaluator(Evaluator):
             logger.info("BLEU %s %s : %f" % (hyp_path, ref_path, bleu))
             scores['%s_%s-%s_mt_bleu' % (data_set, lang1, lang2)] = bleu
 
+
+
 def convert_to_text(batch, lengths, dico, params):
     """
     Convert a batch of sentences to a list of text sentences.
     """
+    # generated, lengths, self.dico, params
     batch = batch.cpu().numpy()
     lengths = lengths.cpu().numpy()
 
@@ -657,7 +665,7 @@ def convert_to_text(batch, lengths, dico, params):
     for j in range(bs):
         words = []
         for k in range(1, lengths[j]):
-            if batch[k, j] == params.eos_index:
+            if batch[k, j] == params.eos_index or batch[k, j] == params.pad_index:
                 break
             words.append(dico[batch[k, j]])
         sentences.append(" ".join(words))

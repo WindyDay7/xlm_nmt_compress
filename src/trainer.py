@@ -963,7 +963,8 @@ class LSTM_Trainer(Trainer):
         if lambda_coeff == 0:
             return
         params = self.params
-
+        self.encoder.train()
+        self.decoder.train()
         (x1, len1), (x2, len2) = self.get_batch('mt', lang1, lang2)
 
         x1, len1, x2, len2 = to_cuda(x1, len1, x2, len2)
@@ -1003,7 +1004,7 @@ class LSTM_Trainer(Trainer):
                     break
 
         self.optimize(loss)
-
+        # print(loss)
         # number of processed sentences / words
         self.n_sentences += Batch_size
         self.stats['processed_s'] += len1.size(0)

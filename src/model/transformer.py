@@ -129,12 +129,14 @@ class PredLayer(nn.Module):
         """
         Compute the loss, and optionally the scores.
         """
+        # x is output of the decoder
         assert (y == self.pad_index).sum().item() == 0
         # 在参数的结果下, 这里的本质只有 x 通过了线性层, 所以存储的时候将 scores 存储即可,作为之后交叉熵损失的计算
         if self.asm is False:
             # if_diff default == 0
             if self.if_diff == 1:
                 y = self.proj(y).view(-1, self.n_words).long()
+            # This step is output the result wrods, rather than the vector of the word
             scores = self.proj(x).view(-1, self.n_words)
             # 输出之后顺带计算了损失函数, 如果我们希望存储 scores的结果, 就即返回 loss, 也返回 scores
             loss = F.cross_entropy(scores, y, reduction='mean')
@@ -453,6 +455,7 @@ class TransformerModel(nn.Module):
             `get_scores` is a boolean specifying whether we need to return scores
         """
         masked_tensor = tensor[pred_mask.unsqueeze(-1).expand_as(tensor)].view(-1, self.dim)
+        # y 是 decoder 的输出, 只有一个 y怎么计算 loss?
         scores, loss = self.pred_layer(masked_tensor, y, get_scores)
         return scores, loss
 
