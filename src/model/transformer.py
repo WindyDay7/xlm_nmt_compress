@@ -267,7 +267,7 @@ class TransformerModel(nn.Module):
         self.id2lang = params.id2lang
         self.lang2id = params.lang2id
         self.use_lang_emb = getattr(params, 'use_lang_emb', True)
-        assert len(self.dico) == self.  
+        assert len(self.dico) == self.n_words
         assert len(self.id2lang) == len(self.lang2id) == self.n_langs
 
         # model parameters

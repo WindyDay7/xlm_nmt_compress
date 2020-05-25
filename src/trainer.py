@@ -16,15 +16,15 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 import apex
+import random
 
 from .optim import get_optimizer
 from .utils import to_cuda, concat_batches, find_modules
 from .utils import parse_lambda_config, update_lambdas
 from .model.memory import HashingMemory
 from .model.transformer import TransformerFFN
-from Student_model import Attention_decoder
-from Student_model import EncoderRNN
-
+import src.Student_model.Attention_decoder as Attention_decoder
+import src.Student_model.EncoderRNN as EncoderRNN
 
 logger = getLogger()
 
@@ -947,63 +947,64 @@ class EncDecTrainer(Trainer):
         self.stats['processed_w'] += (len1 - 1).sum().item()
         return scores
 
+class LSTM_Trainer(Trainer):
+
+    def __init__(self, encoder, decoder, data, params):
+        self.MODEL_NAMES = ['encoder', 'decoder']
+        self.encoder = encoder
+        self.decoder = decoder
+        self.data = data    
+        self.params = params
+
+        super().__init__(data, params)
+
     def try_lstm(self, lang1, lang2, lambda_coeff):
         assert lambda_coeff >= 0
         if lambda_coeff == 0:
             return
         params = self.params
-        self.encoder.train()
-        self.decoder.train()
-
-        lang1_id = params.lang2id[lang1]
-        lang2_id = params.lang2id[lang2]
 
         (x1, len1), (x2, len2) = self.get_batch('mt', lang1, lang2)
 
-        langs1 = x1.clone().fill_(lang1_id)
-        langs2 = x2.clone().fill_(lang2_id)
-
-        x1, len1, langs1, x2, len2, langs2 = to_cuda(x1, len1, langs1, x2, len2, langs2)
+        x1, len1, x2, len2 = to_cuda(x1, len1, x2, len2)
         criterion = nn.NLLLoss()
-
-        hidden_size = 1024
-        encoder = EncoderRNN.EncoderRNN(params.n_words, hidden_size).to(device)
-        attn_decoder = Attention_decoder.Attention_decoder(hidden_size, params.n_words, dropout_p=0.1).to(device)
         Batch_size = x1.size(1)
-        encoder_hidden = encoder.initHidden(Batch_size)
-        encoder_outputs = torch.zeros(2000, Batch_size, hidden_size, device = device)
+        input_length = x1.size(0)
+        target_length = x2.size(0)
+        encoder_hidden = self.encoder.initHidden(Batch_size)
+        encoder_outputs = torch.zeros(2000, Batch_size, 1024).cuda()
         loss = 0
-
-        for ei in range(len1):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+        
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = self.encoder(x1[ei], encoder_hidden, Batch_size)
             encoder_outputs[ei] = encoder_output[0, 0]
 
-        decoder_input = torch.tensor([[[0]]], device=device)
-        decoder_hidden = decoder.initHidden(Batch_size)
+        decoder_input = torch.tensor([[0]]).cuda()
+        decoder_hidden = self.decoder.initHidden(Batch_size)
 
         use_teacher_forcing = True if random.random() < 0.5 else False
 
         if use_teacher_forcing:
             # Teacher forcing: Feed the target as the next input
-            for di in range(len2):
-                decoder_output, decoder_hidden, decoder_attention = attn_decoder(decoder_input, decoder_hidden, encoder_outputs)
+            for di in range(target_length):
+                decoder_output, decoder_hidden, decoder_attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs, Batch_size)
                 loss += criterion(decoder_output, x2[di])
                 decoder_input = x2[di]  # Teacher forcing
 
         else:
             # Without teacher forcing: use its own predictions as the next input
-            for di in range(len2):
-                decoder_output, decoder_hidden, decoder_attention = attn_decoder(decoder_input, decoder_hidden, encoder_outputs)
+            for di in range(target_length):
+                decoder_output, decoder_hidden, decoder_attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs, Batch_size)
                 topv, topi = decoder_output.topk(1)
                 decoder_input = topi.squeeze().detach()  # detach from history as input
 
-                loss += criterion(decoder_output, target_tensor[di])
-                if decoder_input.item() == 1:
+                loss += criterion(decoder_output, x2[di])
+                if decoder_input[0].item() == 1:
                     break
 
         self.optimize(loss)
 
         # number of processed sentences / words
-        self.n_sentences += params.batch_size
+        self.n_sentences += Batch_size
         self.stats['processed_s'] += len1.size(0)
         self.stats['processed_w'] += (len1 - 1).sum().item()

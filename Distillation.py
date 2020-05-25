@@ -1,55 +1,8 @@
 # coding=utf-8
 
-import torch
-import random
-import time
-import math
-import torch.nn as nn
 
-
-import Student_model.Attention_decoder as Attention_decoder
-import Student_model.EncoderRNN as EncoderRNN
-
-teacher_forcing_ratio = 0.5
-MAX_LENGTH = 10
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-SOS_token = 0
-EOS_token = 1
-
-hidden_size = 256
-encoder1 = EncoderRNN.EncoderRNN(400, hidden_size).to(device)
-attn_decoder1 = Attention_decoder.Attention_decoder(hidden_size, 400, dropout_p=0.1).to(device)
-
-
-# encoder = EncoderRNN.EncoderRNN(128, 128).cuda()
-# decoder = Attention_decoder.Attention_decoder(128, 128).cuda()
-#
-# trainIters(encoder, decoder, n_iters=100)
-
-import os
-import math
-import time
-from logging import getLogger
-from collections import OrderedDict
-import numpy as np
-import torch
-from torch import nn
-from torch.nn import functional as F
-from torch.nn.utils import clip_grad_norm_
-import apex
-
-from .optim import get_optimizer
-from .utils import to_cuda, concat_batches, find_modules
-from .utils import parse_lambda_config, update_lambdas
-from .model.memory import HashingMemory
-from .model.transformer import TransformerFFN
-
-# Copyright (c) 2019-present, Facebook, Inc.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-#
+from src.Student_model import Attention_decoder as Attention_decoder
+from src.Student_model import EncoderRNN as EncoderRNN
 
 import json
 import random
@@ -60,7 +13,7 @@ from src.data.loader import check_data_params, load_data
 from src.utils import bool_flag, initialize_exp, set_sampling_probs, shuf_order
 from src.model import check_model_params, build_model
 from src.model.memory import HashingMemory
-from src.trainer import SingleTrainer, EncDecTrainer
+from src.trainer import SingleTrainer, EncDecTrainer, LSTM_Trainer
 from src.evaluation.evaluator import SingleEvaluator, EncDecEvaluator
 
 
@@ -278,37 +231,16 @@ def main(params):
 
     # load data
     data = load_data(params)
-
-    # build model
-    if params.encoder_only:
-        model = build_model(params, data['dico'])
-    else:
-        # 修改处1
-        encoder, decoder = build_model(params, data['dico'])
-
-    # build trainer, reload potential checkpoints / build evaluator
-    if params.encoder_only:
-        trainer = SingleTrainer(model, data, params)
-        evaluator = SingleEvaluator(trainer, data, params)
-    else:
-        trainer = EncDecTrainer(encoder, decoder, data, params)
-        evaluator = EncDecEvaluator(trainer, data, params)
-
-    # evaluation
-    if params.eval_only:
-        scores = evaluator.run_all_evals(trainer)
-        for k, v in scores.items():
-            logger.info("%s -> %.6f" % (k, v))
-        logger.info("__log__:%s" % json.dumps(scores))
-        exit()
+    hidden_size = 1024
+    encoder = EncoderRNN.EncoderRNN(params.n_words, hidden_size).cuda()
+    decoder = Attention_decoder.Attention_decoder(hidden_size, params.n_words, dropout_p=0.1).cuda()
+    trainer = LSTM_Trainer(encoder, decoder, data, params)
 
     # set sampling probabilities for training
     set_sampling_probs(data, params)
     # language model training
     for count in range(params.max_epoch):
-        clm_temp[count] = {}
-        ml_temp[count] = {}
-        bt_temp[count] = {}
+
         logger.info("============ Starting epoch %i ... ============" % trainer.epoch)
 
         trainer.n_sentences = 0
@@ -318,7 +250,6 @@ def main(params):
             for lang1, lang2 in shuf_order(params.mt_steps, params):
                 trainer.try_lstm(lang1, lang2, params.lambda_mt)
 
-            trainer.iter()
 
         logger.info("============ End of epoch %i ============" % trainer.epoch)
 

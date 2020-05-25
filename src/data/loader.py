@@ -327,7 +327,7 @@ def check_data_params(params):
             if not os.path.isfile(p2):
                 logger.error(f"{p2} not found")
     assert all([all([os.path.isfile(p1) and os.path.isfile(p2) for p1, p2 in paths.values()]) for paths in params.para_dataset.values()])
-
+    
     # check that we can evaluate on BLEU
     assert params.eval_bleu is False or len(params.mt_steps + params.bt_steps) > 0
 
