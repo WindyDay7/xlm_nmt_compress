@@ -14,7 +14,7 @@ from src.utils import bool_flag, initialize_exp, set_sampling_probs, shuf_order
 from src.model import check_model_params, build_model
 from src.model.memory import HashingMemory
 from src.trainer import SingleTrainer, EncDecTrainer, LSTM_Trainer
-from src.evaluation.evaluator import SingleEvaluator, EncDecEvaluator
+from src.evaluation.evaluator import SingleEvaluator, EncDecEvaluator, LSTM_Evaluator
 
 
 def get_parser():
@@ -235,7 +235,7 @@ def main(params):
     encoder = EncoderRNN.EncoderRNN(params.n_words, hidden_size).cuda()
     decoder = Attention_decoder.Attention_decoder(hidden_size, params.n_words, dropout_p=0.1).cuda()
     trainer = LSTM_Trainer(encoder, decoder, data, params)
-
+    evaluator = LSTM_Evaluator(trainer, data, params)
     # set sampling probabilities for training
     set_sampling_probs(data, params)
     # language model training

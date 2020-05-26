@@ -11,6 +11,7 @@ import subprocess
 from collections import OrderedDict
 import numpy as np
 import torch
+import random
 
 from ..utils import to_cuda, restore_segmentation, concat_batches
 from ..model.memory import HashingMemory
@@ -238,8 +239,10 @@ class Evaluator(object):
                 # machine translation task (evaluate perplexity and accuracy)
                 for lang1, lang2 in set(params.mt_steps + [(l2, l3) for _, l2, l3 in params.bt_steps]):
                     eval_bleu = params.eval_bleu and params.is_master
-                    self.evaluate_mt(scores, data_set, lang1, lang2, eval_bleu)
+                    # self.evaluate_mt(scores, data_set, lang1, lang2, eval_bleu)
+                    self.evaluate_lstm_mt(scores, data_set, lang1, lang2, eval_bleu)
 
+                    
                 # report average metrics per language
                 _clm_mono = [l1 for (l1, l2) in params.clm_steps if l2 is None]
                 if len(_clm_mono) > 0:
@@ -551,8 +554,9 @@ class LSTM_Evaluator(Evaluator):
 
         self.encoder.eval()
         self.decoder.eval()
-
+        
         params = params
+        tokens_per_batch = params.tokens_per_batch
         lang1_id = params.lang2id[lang1]
         lang2_id = params.lang2id[lang2]
 
@@ -569,7 +573,8 @@ class LSTM_Evaluator(Evaluator):
         # store hypothesis to compute BLEU score
         if eval_bleu:
             hypothesis = []
-
+        criterion = nn.NLLLoss()
+        loss = 0
         for batch in self.get_iterator(data_set, lang1, lang2):
 
             # generate batch
@@ -579,7 +584,7 @@ class LSTM_Evaluator(Evaluator):
             input_length = x1.size(0)
             target_length = x2.size(0)
             encoder_hidden = self.encoder.initHidden(Batch_size)
-            encoder_outputs = torch.zeros(params.tokens_per_batch, Batch_size, 1024).cuda()
+            encoder_outputs = torch.zeros(tokens_per_batch, Batch_size, 1024).cuda()
             loss = 0
             
             for ei in range(input_length):
@@ -589,26 +594,31 @@ class LSTM_Evaluator(Evaluator):
             decoder_input = torch.tensor([[0]]).cuda()
             decoder_hidden = self.decoder.initHidden(Batch_size)
 
-            decoder_outputs = torch.ones(params.tokens_per_batch, Batch_size, params.n_words).cuda()
+            decoder_outputs = torch.ones(tokens_per_batch, Batch_size, params.n_words).cuda()
             use_teacher_forcing = True if random.random() < 0.5 else False
-
+            end_flag = torch.full((1, Batch_size), 2).int().squeeze(0).cuda()
             if use_teacher_forcing:
                 # Teacher forcing: Feed the target as the next input
-                for di in range(target_length):
+                for di in range(tokens_per_batch):
                     decoder_output, decoder_hidden, decoder_attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs, Batch_size)
                     loss += criterion(decoder_output, x2[di])
                     decoder_input = x2[di]  # Teacher forcing
+                    
+                    if decoder_output.argmax(-1).equal(end_flag):
+                        break
                     decoder_outputs[di] = decoder_output
 
             else:
                 # Without teacher forcing: use its own predictions as the next input
-                for di in range(target_length):
+                for di in range(tokens_per_batch):
                     decoder_output, decoder_hidden, decoder_attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs, Batch_size)
                     topv, topi = decoder_output.topk(1)
                     decoder_input = topi.squeeze().detach()  # detach from history as input
                     
                     loss += criterion(decoder_output, x2[di])
-                    if decoder_input[0].item() == 1:
+                    if decoder_input[0].item() == 2:
+                        break
+                    if decoder_output.argmax(-1).equal(end_flag):
                         break
                     decoder_outputs[di] = decoder_output
 
@@ -664,6 +674,7 @@ def convert_to_text(batch, lengths, dico, params):
 
     for j in range(bs):
         words = []
+        # In this step, we could delete the <eos> of every sentence
         for k in range(1, lengths[j]):
             if batch[k, j] == params.eos_index or batch[k, j] == params.pad_index:
                 break

@@ -963,6 +963,7 @@ class LSTM_Trainer(Trainer):
         if lambda_coeff == 0:
             return
         params = self.params
+        tokens_per_batch = params.tokens_per_batch
         self.encoder.train()
         self.decoder.train()
         (x1, len1), (x2, len2) = self.get_batch('mt', lang1, lang2)
@@ -973,14 +974,16 @@ class LSTM_Trainer(Trainer):
         input_length = x1.size(0)
         target_length = x2.size(0)
         encoder_hidden = self.encoder.initHidden(Batch_size)
-        encoder_outputs = torch.zeros(2000, Batch_size, 1024).cuda()
+        encoder_outputs = torch.zeros(tokens_per_batch, Batch_size, 1024).cuda()
         loss = 0
         
         for ei in range(input_length):
             encoder_output, encoder_hidden = self.encoder(x1[ei], encoder_hidden, Batch_size)
             encoder_outputs[ei] = encoder_output[0, 0]
 
-        decoder_input = torch.tensor([[0]]).cuda()
+        # decoder_input = torch.tensor([[0]]).cuda()
+        # decoder_input = x2[0]
+        decoder_input = torch.zeros(Batch_size).long().cuda()
         decoder_hidden = self.decoder.initHidden(Batch_size)
 
         use_teacher_forcing = True if random.random() < 0.5 else False
