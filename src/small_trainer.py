@@ -661,7 +661,7 @@ class Trainer(object):
         assert x.size(1) % 8 == 0
         return x, lengths, positions, langs, idx
 
-    def clm_step(self, lang1, lang2, lambda_coeff):
+    def clm_step(self, lang1, lang2, lambda_coeff, big_trainer):
         """
         Next word prediction step (causal prediction).
         CLM objective.
@@ -673,6 +673,9 @@ class Trainer(object):
         name = 'model' if params.encoder_only else 'decoder'
         model = getattr(self, name)
         model.train()
+        # this is the big trainer of the pretrain model
+        big_model = getattr(big_trainer, name)
+        big_model.train()
 
         # generate batch / select words to predict
         x, lengths, positions, langs, _ = self.generate_batch(lang1, lang2, 'causal')
@@ -687,22 +690,34 @@ class Trainer(object):
         # cuda
         x, lengths, langs, pred_mask, y = to_cuda(x, lengths, langs, pred_mask, y)
 
-        # forward / loss
-        tensor = model('fwd', x=x, lengths=lengths, langs=langs, causal=True)
-        scores, loss = model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=True)
-        self.stats[('CLM-%s' % lang1) if lang2 is None else ('CLM-%s-%s' % (lang1, lang2))].append(loss.item())
-        loss = lambda_coeff * loss
+        # forward / loss, first step , use the big model to predict, then use the small model to predict
+        tensor = big_model('fwd', x=x, lengths=lengths, langs=langs, causal=True)
+        big_scores, big_loss = big_model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=True)
+        big_trainer.stats[('CLM-%s' % lang1) if lang2 is None else ('CLM-%s-%s' % (lang1, lang2))].append(big_loss.item())
+        big_loss = lambda_coeff * big_loss
 
         # optimize
+        big_trainer.optimize(big_loss)
+
+        # use the small model to learn the big model, and learn most information
+        tensor = model('fwd', x=x, lengths=lengths, langs=langs, causal=True)
+        small_scores, small_loss = model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=True)
+        self.stats[('CLM-%s' % lang1) if lang2 is None else ('CLM-%s-%s' % (lang1, lang2))].append(small_loss.item())
+        # calculate the new loss between the small and big model
+        learn_loss = F.cross_entropy(big_scores, small_scores, reduction='mean')
+        # use a formulation to calculate the new loss
+        new_loss = 0.7 * learn_loss + 0.3 small_loss
+        loss = lambda_coeff * new_loss
+
         self.optimize(loss)
 
         # number of processed sentences / words
         self.n_sentences += params.batch_size
         self.stats['processed_s'] += lengths.size(0)
         self.stats['processed_w'] += pred_mask.sum().item()
-        return scores
 
-    def mlm_step(self, lang1, lang2, lambda_coeff):
+
+    def mlm_step(self, lang1, lang2, lambda_coeff, big_trainer):
         """
         Masked word prediction step.
         MLM objective is lang2 is None, TLM objective otherwise.
@@ -714,6 +729,9 @@ class Trainer(object):
         name = 'model' if params.encoder_only else 'encoder'
         model = getattr(self, name)
         model.train()
+        # this is the big trainer of the pretrain model
+        big_model = getattr(big_trainer, name)
+        big_model.train()
 
         # generate batch / select words to predict
         x, lengths, positions, langs, _ = self.generate_batch(lang1, lang2, 'pred')
@@ -723,11 +741,25 @@ class Trainer(object):
         # cuda
         x, y, pred_mask, lengths, positions, langs = to_cuda(x, y, pred_mask, lengths, positions, langs)
 
+        # forward / loss, first step , use the big model to predict, then use the small model to predict
+        tensor = big_model('fwd', x=x, lengths=lengths, langs=langs, causal=True)
+        big_scores, big_loss = big_model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=True)
+        big_trainer.stats[('MLM-%s' % lang1) if lang2 is None else ('MLM-%s-%s' % (lang1, lang2))].append(big_loss.item())
+        big_loss = lambda_coeff * big_loss
+
+        # optimize
+        big_trainer.optimize(big_loss)
+
         # forward / loss
         tensor = model('fwd', x=x, lengths=lengths, positions=positions, langs=langs, causal=False)
-        _, loss = model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=False)
-        self.stats[('MLM-%s' % lang1) if lang2 is None else ('MLM-%s-%s' % (lang1, lang2))].append(loss.item())
-        loss = lambda_coeff * loss
+        small_scores, small_loss = model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=False)
+        self.stats[('MLM-%s' % lang1) if lang2 is None else ('MLM-%s-%s' % (lang1, lang2))].append(small_loss.item())
+
+        # calculate the new loss between the small and big model
+        learn_loss = F.cross_entropy(big_scores, small_scores, reduction='mean')
+        # use a formulation to calculate the new loss
+        new_loss = 0.7 * learn_loss + 0.3 small_loss
+        loss = lambda_coeff * new_loss
 
         # optimize
         self.optimize(loss)
@@ -822,7 +854,7 @@ class EncDecTrainer(Trainer):
 
         super().__init__(data, params)
 
-    def mt_step(self, lang1, lang2, lambda_coeff):
+    def mt_step(self, lang1, lang2, lambda_coeff, big_trainer):
         """
         Machine translation step.
         Can also be used for denoising auto-encoding.
@@ -833,6 +865,12 @@ class EncDecTrainer(Trainer):
         params = self.params
         self.encoder.train()
         self.decoder.train()
+
+        # step up the big trainer
+        big_encoder = big_trainer.encoder
+        big_decoder = big_trainer.decoder
+        big_encoder.train()
+        big_decoder.train()
 
         lang1_id = params.lang2id[lang1]
         lang2_id = params.lang2id[lang2]
@@ -858,6 +896,16 @@ class EncDecTrainer(Trainer):
         # cuda
         x1, len1, langs1, x2, len2, langs2, y = to_cuda(x1, len1, langs1, x2, len2, langs2, y)
 
+        # big model train step
+        big_enc1 = big_encoder('fwd', x=x1, lengths=len1, langs=langs1, causal=False)
+        big_enc1 = big_enc1.transpose(0, 1)
+        big_dec2 = big_decoder('fwd', x=x2, lengths=len2, langs=langs2, causal=True, src_enc=big_enc1, src_len=len1)
+
+        big_scores, big_loss = big_decoder('predict', tensor=big_dec2, pred_mask=pred_mask, y=y, get_scores=True)
+        big_trainer.stats[('AE-%s' % lang1) if lang1 == lang2 else ('MT-%s-%s' % (lang1, lang2))].append(big_loss.item())
+        big_loss = lambda_coeff * big_loss
+        big_trainer.optimize(big_loss)
+
         # encode source sentence
         enc1 = self.encoder('fwd', x=x1, lengths=len1, langs=langs1, causal=False)
         enc1 = enc1.transpose(0, 1)
@@ -866,9 +914,15 @@ class EncDecTrainer(Trainer):
         dec2 = self.decoder('fwd', x=x2, lengths=len2, langs=langs2, causal=True, src_enc=enc1, src_len=len1)
 
         # loss
-        scores, loss = self.decoder('predict', tensor=dec2, pred_mask=pred_mask, y=y, get_scores=True)
-        self.stats[('AE-%s' % lang1) if lang1 == lang2 else ('MT-%s-%s' % (lang1, lang2))].append(loss.item())
-        loss = lambda_coeff * loss
+        small_scores, small_loss = self.decoder('predict', tensor=dec2, pred_mask=pred_mask, y=y, get_scores=True)
+        self.stats[('AE-%s' % lang1) if lang1 == lang2 else ('MT-%s-%s' % (lang1, lang2))].append(small_loss.item())
+        small_loss = lambda_coeff * small_loss
+
+        # calculate the new loss between the small and big model
+        learn_loss = F.cross_entropy(big_scores, small_scores, reduction='mean')
+        # use a formulation to calculate the new loss
+        new_loss = 0.7 * learn_loss + 0.3 small_loss
+        loss = lambda_coeff * new_loss
 
         # optimize
         self.optimize(loss)
@@ -877,7 +931,6 @@ class EncDecTrainer(Trainer):
         self.n_sentences += params.batch_size
         self.stats['processed_s'] += len2.size(0)
         self.stats['processed_w'] += (len2 - 1).sum().item()
-        return scores
 
     def bt_step(self, lang1, lang2, lang3, lambda_coeff):
         """
@@ -982,7 +1035,7 @@ class LSTM_Trainer(Trainer):
             encoder_outputs[ei] = encoder_output[0, 0]
 
         # decoder_input = torch.tensor([[0]]).cuda()
-        decoder_input = x2[0]
+        # decoder_input = x2[0]
         decoder_input = torch.zeros(Batch_size).long().cuda()
         decoder_hidden = self.decoder.initHidden(Batch_size)
 

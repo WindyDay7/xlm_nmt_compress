@@ -103,11 +103,10 @@ def set_pretrain_emb(model, dico, word2id, embeddings):
                 % (n_found, len(dico), 100. * n_found / len(dico)))
 
 
-def build_model(params, dico):
+def build_model(params, dico, cut):
     """
     Build model.
-    """ 
-    # encoder, decoder = build_model(params, data['dico'])
+    """
     if params.encoder_only:
         # build
         model = TransformerModel(params, dico, is_encoder=True, with_output=True)
@@ -141,6 +140,8 @@ def build_model(params, dico):
 
     else:
         # build
+        if cut:
+            params.n_layers = 4
         encoder = TransformerModel(params, dico, is_encoder=True, with_output=False)  # TODO: only output when necessary - len(params.clm_steps + params.mlm_steps) > 0
         decoder = TransformerModel(params, dico, is_encoder=False, with_output=True)
 
@@ -162,12 +163,14 @@ def build_model(params, dico):
                 enc_reload = enc_reload['model' if 'model' in enc_reload else 'encoder']
                 if all([k.startswith('module.') for k in enc_reload.keys()]):
                     enc_reload = {k[len('module.'):]: v for k, v in enc_reload.items()}
-                encoder.load_state_dict(enc_reload)
+                encoder.load_state_dict(enc_reload, strict = False)
 
             # reload decoder
             if dec_path != '':
                 logger.info("Reloading decoder from %s ..." % dec_path)
                 dec_reload = torch.load(dec_path, map_location=lambda storage, loc: storage.cuda(params.local_rank))
+                # load the model, and calculate the layer of the model
+                # seperate the model into dictionary and save it
                 dec_reload = dec_reload['model' if 'model' in dec_reload else 'decoder']
                 if all([k.startswith('module.') for k in dec_reload.keys()]):
                     dec_reload = {k[len('module.'):]: v for k, v in dec_reload.items()}
@@ -176,7 +179,7 @@ def build_model(params, dico):
                         if name % i not in dec_reload:
                             logger.warning("Parameter %s not found." % (name % i))
                             dec_reload[name % i] = decoder.state_dict()[name % i]
-                decoder.load_state_dict(dec_reload)
+                decoder.load_state_dict(dec_reload, strict = False)
 
         logger.debug("Encoder: {}".format(encoder))
         logger.debug("Decoder: {}".format(decoder))
