@@ -1,43 +1,13 @@
-# Cross-lingual Language Model Pretraining + NMT task
-Implementation of XLM pretrained model with NMT task
+# A way to compress the XLM cross language NMT model
 
-### Contents
+## Knowledge Distillation
 
-* [Installation](#installation)
-* [Usage](#usage)
-  * [Train](#train)
+ Knowledge Distillation is a way to learn the output of a big model, it was proofed very useful in learn Big model's output to improve the accuracy of the Small model, the most important part of it is using knowledge of Softmax.
 
----
+In general, we could regard the neural networks as lot of matrix that save the information of the network. So, for a neural network, how do we get the information of it, Knowledge Distillation is a way to get the information of the matrix, we first explain the standard softmax function:
 
-## Installation
-```
-virtualenv venv -p python3
-source venv/bin/activate
--PyTorch (currently tested on version 0.4 and 1.0) https://pytorch.org/get-started/locally/
--fastBPE (generate and apply BPE codes) https://github.com/facebookresearch/XLM/tree/master/tools#fastbpe
--Moses (scripts to clean and tokenize text only - no installation required) https://github.com/facebookresearch/XLM/tree/master/tools#tokenizers
--Apex (for fp16 training) https://github.com/nvidia/apex#quick-start
-```
+![{\displaystyle \sigma (\mathbf {z} )_{i}={\frac {e^{z_{i))}{\sum _{j=1}^{K}e^{z_{j)))){\text{ for ))i=1,\dotsc ,K{\text{ and ))\mathbf {z} =(z_{1},\dotsc ,z_{K})\in \mathbb {R} ^{K))](https://wikimedia.org/api/rest_v1/media/math/render/svg/bdc1f8eaa8064d15893f1ba6426f20ff8e7149c5)
 
-## Usage
+it was a kind of Normalized function, In above example, it has $K$ kinds of classifications, and the result is for class $J$, then $\sigma(z)_j$ is biggest, and it was much bigger than others that $i\neq j$ , In this way, we can only get information about the classification $J$ but others,  
 
-### Train XLM + UNMT
-Download model mlm_17_1280.pth (en-pt) (cd ./)
-https://dl.fbaipublicfiles.com/XLM/mlm_ende_1024.pth
-
-Download corpus en-pt (cd ./data-en-pt/mono)
-https://drive.google.com/open?id=1MMMLWYpqq0d6HLQXzhYOJni-X5zno834
-
-Preprocess data (Will create the "/data-en-pt/processed" folder)
-```
-./get-data-nmt.sh --src en --tgt pt --reload_codes codes_xnli_17.txt --reload_vocab vocab_xnli_17.txt
-```
-
-Train (CPU)
-```
-bash train.sh
-```
-Train (GPU)
-```
-bash train-gpu.sh
-```
+To consider another way, we first smooth the matrix's output $z_{i}$ , 
