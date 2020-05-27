@@ -38,3 +38,4 @@ While train knowledge distillation, two ways could be used, one is save the big 
 
 BIDGRU means Bi-direction GRU network, which means use bi-direction GRU to construct a Seq-to-Seq model, We know the XLM used the BPE code as the way to code the tokens, In this condition, I wonder what's performance of BIDGRU seq-to-seq model. And this part of strategy also need a big change in code, particularly in the construction of model. I specify this part of Code in Student_Model, which also will be train as Student_Model, but for now, I have some trouble in deal with batch_size in seq-to-seq model, the problem is that when should we stop the decoder step, and how to determine the end of the sentence.
 
+ 
