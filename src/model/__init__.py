@@ -8,6 +8,7 @@
 from logging import getLogger
 import os
 import torch
+import re
 
 from .pretrain import load_embeddings
 from .transformer import DECODER_ONLY_PARAMS, TransformerModel  # , TRANSFORMER_LAYER_PARAMS
@@ -187,3 +188,37 @@ def build_model(params, dico, cut):
         logger.info("Number of parameters (decoder): %i" % sum([p.numel() for p in decoder.parameters() if p.requires_grad]))
 
         return encoder.cuda(), decoder.cuda()
+
+def cut_model(encoder, decoder, params):
+    """
+    Cut the encoder and decoder Model
+    """
+    for name, param in encoder.named_parameters():
+        # print(type(param))
+        No_zero = torch.nonzero(param)
+        new_name = re.split(r'\.',name)
+        if new_name[0] == 'attentions' and new_name[2] == 'v_lin':
+            zero = torch.zeros_like(param)
+            param = torch.where(param < param.threshold, zero, param)
+
+        if new_name[0] == 'ffns':
+            zero = torch.zeros_like(param)
+            param = torch.where(param < param.threshold, zero, param)
+        # print(No_zero.tolist())
+        # print(name, type(param))
+    
+    for name, param in encoder.named_parameters():
+        # print(type(param))
+        No_zero = torch.nonzero(param)
+        new_name = re.split(r'\.',name)
+        if new_name[0] == 'attentions' and new_name[2] == 'v_lin':
+            zero = torch.zeros_like(param)
+            param = torch.where(param < param.threshold, zero, param)
+
+        if new_name[0] == 'ffns':
+            zero = torch.zeros_like(param)
+            param = torch.where(param < param.threshold, zero, param)
+        # print(No_zero.tolist())
+        # print(name, type(param))
+
+    return encoder, decoder

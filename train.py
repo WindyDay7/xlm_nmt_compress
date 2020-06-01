@@ -12,7 +12,7 @@ import argparse
 from src.slurm import init_signal_handler, init_distributed_mode
 from src.data.loader import check_data_params, load_data
 from src.utils import bool_flag, initialize_exp, set_sampling_probs, shuf_order
-from src.model import check_model_params, build_model
+from src.model import check_model_params, build_model, cut_model
 from src.model.memory import HashingMemory
 from src.trainer import SingleTrainer, EncDecTrainer
 from src.evaluation.evaluator import SingleEvaluator, EncDecEvaluator
@@ -240,6 +240,9 @@ def main(params):
         # 修改处1
         encoder, decoder = build_model(params, data['dico'])
 
+    # cut model before train
+    encoder, decoder = cut_model(encoder, decoder, params)
+
     # build trainer, reload potential checkpoints / build evaluator
     if params.encoder_only:
         trainer = SingleTrainer(model, data, params)
@@ -258,26 +261,17 @@ def main(params):
 
     # set sampling probabilities for training
     set_sampling_probs(data, params)
-    clm_temp = {}
-    ml_temp = {}
-    bt_temp = {}
     # language model training
     for count in range(params.max_epoch):
-        clm_temp[count] = {}
-        ml_temp[count] = {}
-        bt_temp[count] = {}
+
         logger.info("============ Starting epoch %i ... ============" % trainer.epoch)
 
         trainer.n_sentences = 0
 
         while trainer.n_sentences < trainer.epoch_size:
-            clm_temp[count][trainer.n_sentences] = []
-            ml_temp[count][trainer.n_sentences] = []
-            bt_temp[count][trainer.n_sentences] = []
             # CLM steps
             for lang1, lang2 in shuf_order(params.clm_steps, params):
-                temp1 = trainer.clm_step(lang1, lang2, params.lambda_clm)
-                clm_temp[count][trainer.n_sentences].append(temp1)
+                rainer.clm_step(lang1, lang2, params.lambda_clm)
             # MLM steps (also includes TLM if lang2 is not None)
             for lang1, lang2 in shuf_order(params.mlm_steps, params):
                 trainer.mlm_step(lang1, lang2, params.lambda_mlm)
@@ -292,13 +286,11 @@ def main(params):
 
             # machine translation steps
             for lang1, lang2 in shuf_order(params.mt_steps, params):
-                temp2 = trainer.mt_step(lang1, lang2, params.lambda_mt)
-                ml_temp[count][trainer.n_sentences].append(temp2)
+                trainer.mt_step(lang1, lang2, params.lambda_mt)
 
             # back-translation steps
             for lang1, lang2, lang3 in shuf_order(params.bt_steps):
-                temp3 = trainer.bt_step(lang1, lang2, lang3, params.lambda_bt)
-                bt_temp[count][trainer.n_sentences].append(temp3)
+                trainer.bt_step(lang1, lang2, lang3, params.lambda_bt)
 
             trainer.iter()
 
@@ -313,11 +305,15 @@ def main(params):
         if params.is_master:
             logger.info("__log__:%s" % json.dumps(scores))
 
+        # cut model while train, 
+        trainer.encoder, trainer.decoder = cut_model(trainer.encoder, trainer.decoder)
+
+
         # end of epoch
         trainer.save_best_model(scores)
         trainer.save_periodic()
         trainer.end_epoch(scores)
-
+    
     # save the output of softmax
     trainer.save_softmax_output(clm_temp, 'clm_temp')
     trainer.save_softmax_output(ml_temp, 'ml_temp')
