@@ -189,6 +189,9 @@ def build_model(params, dico, cut):
 
         return encoder.cuda(), decoder.cuda()
 
+def update_model(params):
+    
+
 def cut_model(encoder, decoder, params):
     """
     Cut the encoder and decoder Model

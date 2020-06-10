@@ -242,7 +242,7 @@ def main(params):
 
     # cut model before train
     encoder, decoder = cut_model(encoder, decoder, params)
-
+    
     # build trainer, reload potential checkpoints / build evaluator
     if params.encoder_only:
         trainer = SingleTrainer(model, data, params)

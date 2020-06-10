@@ -706,7 +706,7 @@ class Trainer(object):
         # calculate the new loss between the small and big model
         learn_loss = F.cross_entropy(big_scores, small_scores, reduction='mean')
         # use a formulation to calculate the new loss
-        new_loss = 0.7 * learn_loss + 0.3 small_loss
+        new_loss = 0.7 * learn_loss + 0.3 * small_loss
         loss = lambda_coeff * new_loss
 
         self.optimize(loss)
@@ -752,13 +752,13 @@ class Trainer(object):
 
         # forward / loss
         tensor = model('fwd', x=x, lengths=lengths, positions=positions, langs=langs, causal=False)
-        small_scores, small_loss = model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=False)
+        small_scores, small_loss = model('predict', tensor=tensor, pred_mask=pred_mask, y=y, get_scores=True)
         self.stats[('MLM-%s' % lang1) if lang2 is None else ('MLM-%s-%s' % (lang1, lang2))].append(small_loss.item())
 
         # calculate the new loss between the small and big model
         learn_loss = F.cross_entropy(big_scores, small_scores, reduction='mean')
         # use a formulation to calculate the new loss
-        new_loss = 0.7 * learn_loss + 0.3 small_loss
+        new_loss = 0.7 * learn_loss + 0.3 * small_loss
         loss = lambda_coeff * new_loss
 
         # optimize
@@ -919,9 +919,9 @@ class EncDecTrainer(Trainer):
         small_loss = lambda_coeff * small_loss
 
         # calculate the new loss between the small and big model
-        learn_loss = F.cross_entropy(big_scores, small_scores, reduction='mean')
+        learn_loss = F.cross_entropy(big_scores, small_scores)
         # use a formulation to calculate the new loss
-        new_loss = 0.7 * learn_loss + 0.3 small_loss
+        new_loss = 0.7 * learn_loss + 0.3 * small_loss
         loss = lambda_coeff * new_loss
 
         # optimize

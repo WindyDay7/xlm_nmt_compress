@@ -17,8 +17,8 @@ from src.model.memory import HashingMemory
 from src.trainer import SingleTrainer, EncDecTrainer
 from src.evaluation.evaluator import SingleEvaluator, EncDecEvaluator
 
-import src.small_trainer.SingleTrainer as small_SingleTrainer
-import src.small_trainer.EncDecTrainer as small_EncDecTrainer
+from src.small_trainer import SingleTrainer as small_SingleTrainer
+from src.small_trainer import EncDecTrainer as small_EncDecTrainer
 
 def get_parser():
     """
@@ -257,6 +257,14 @@ def main(params):
     else:
         big_trainer = EncDecTrainer(big_encoder, big_decoder, data, params)
     
+    params.lambda_mlm = "1"
+    params.lambda_clm = "1"
+    params.lambda_pc = "1"
+    params.lambda_ae = "1"
+    params.lambda_mt = "1"
+    params.lambda_bt = "1"
+
+    
     # build the small model, and use it for evaluator
     if params.encoder_only:
         small_trainer = small_SingleTrainer(small_model, data, params)
@@ -279,7 +287,7 @@ def main(params):
     # language model training
     for count in range(params.max_epoch):
 
-        logger.info("============ Starting epoch %i ... ============" % trainer.epoch)
+        logger.info("============ Starting epoch %i ... ============" % small_trainer.epoch)
 
         small_trainer.n_sentences = 0
 
